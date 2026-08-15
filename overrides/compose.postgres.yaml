@@ -1,0 +1,61 @@
+# Postgres-Variante — Pruefstand fuer die Datenbankneutralitaet des apex-Codes.
+# Produktions-Standard bleibt MariaDB (Frappes Hauptpfad).
+# Start:  docker compose -f compose.yaml -f overrides/compose.postgres.yaml up -d
+#
+# Auf demselben Host parallel zur MariaDB-Variante nur mit eigenem
+# Projektnamen starten (eigene Volumes!):  docker compose -p apex-pg ...
+
+services:
+  db:
+    # Version wie im offiziellen frappe_docker (overrides/compose.postgres.yaml)
+    image: postgres:15.17
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt (siehe example.env)}
+    # DB von aussen erreichbar; DB_BIND=0.0.0.0 in .env setzen, um sie im
+    # Netzwerk freizugeben (dann unbedingt Firewall auf vertrauenswuerdige IPs!)
+    ports:
+      - "${DB_BIND:-127.0.0.1}:${DB_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 1s
+      retries: 20
+
+  configurator:
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      - >
+        bench set-config -g db_host db;
+        bench set-config -gp db_port 5432;
+        bench set-config -g redis_cache "redis://redis-cache:6379";
+        bench set-config -g redis_queue "redis://redis-queue:6379";
+        bench set-config -g redis_socketio "redis://redis-queue:6379";
+        bench set-config -gp socketio_port 9000;
+
+  create-site:
+    command:
+      - >
+        wait-for-it -t 120 db:5432;
+        wait-for-it -t 120 redis-cache:6379;
+        wait-for-it -t 120 redis-queue:6379;
+        export start=`date +%s`;
+        until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]];
+        do
+          echo "Warte auf common_site_config.json...";
+          sleep 5;
+          if (( `date +%s`-start > 120 )); then echo "Timeout"; exit 1; fi
+        done;
+        [ -d "sites/${SITE_NAME}" ] && echo "Site existiert bereits" && exit 0;
+        bench new-site ${SITE_NAME}
+        --db-type postgres
+        --db-root-username postgres
+        --admin-password=${ADMIN_PASSWORD}
+        --db-root-password=${DB_PASSWORD}
+        --install-app apex;
+
+volumes:
+  db-data:

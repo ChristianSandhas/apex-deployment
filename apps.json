@@ -1,0 +1,6 @@
+[
+  {
+    "url": "https://{{PAT}}@github.com/ChristianSandhas/apex.git",
+    "branch": "{{BRANCH}}"
+  }
+]

@@ -1,0 +1,82 @@
+# Basis-Stack ohne Datenbank — immer zusammen mit einem DB-Override starten:
+#
+#   docker compose -f compose.yaml -f overrides/compose.mariadb.yaml up -d
+#   docker compose -f compose.yaml -f overrides/compose.postgres.yaml up -d
+#
+# Die DB-spezifischen Teile (db-Service, configurator- und create-site-Kommandos)
+# liegen in overrides/ — diese Datei allein ist bewusst nicht lauffähig.
+
+x-app-image: &app_image
+  image: ${APEX_IMAGE:-ghcr.io/christiansandhas/apex}:${APEX_VERSION:-latest}
+  restart: unless-stopped
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+
+x-depends-on-configurator: &depends_on_configurator
+  depends_on:
+    configurator:
+      condition: service_completed_successfully
+
+services:
+  redis-cache:
+    image: redis:6.2-alpine
+    restart: unless-stopped
+
+  redis-queue:
+    image: redis:6.2-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-queue-data:/data
+
+  configurator:
+    <<: *app_image
+    restart: "no"
+    entrypoint: ["bash", "-c"]
+    # command + depends_on kommen aus dem DB-Override (db_port unterscheidet sich)
+
+  create-site:
+    <<: [*app_image, *depends_on_configurator]
+    restart: "no"
+    entrypoint: ["bash", "-c"]
+    # command kommt aus dem DB-Override (new-site-Flags unterscheiden sich)
+
+  backend:
+    <<: [*app_image, *depends_on_configurator]
+
+  frontend:
+    <<: *app_image
+    command: ["nginx-entrypoint.sh"]
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      FRAPPE_SITE_NAME_HEADER: ${SITE_NAME}
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: 120
+      CLIENT_MAX_BODY_SIZE: 50m
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    depends_on:
+      - backend
+      - websocket
+
+  websocket:
+    <<: [*app_image, *depends_on_configurator]
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+
+  queue-short:
+    <<: [*app_image, *depends_on_configurator]
+    command: ["bench", "worker", "--queue", "short,default"]
+
+  queue-long:
+    <<: [*app_image, *depends_on_configurator]
+    command: ["bench", "worker", "--queue", "long,default,short"]
+
+  scheduler:
+    <<: [*app_image, *depends_on_configurator]
+    command: ["bench", "schedule"]
+
+volumes:
+  sites:
+  redis-queue-data:
