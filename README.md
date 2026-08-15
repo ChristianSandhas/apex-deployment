@@ -22,10 +22,51 @@ apps.json + build.sh             manueller Image-Build (Fallback)
 Die Basis-Datei allein ist bewusst nicht lauffähig — immer mit genau einem
 DB-Override kombinieren.
 
+## Systemvoraussetzungen
+
+- Linux-Server, **x86_64/amd64** (das Image wird nur für diese Architektur
+  gebaut), z.B. Ubuntu 22.04/24.04 LTS
+- **Docker Engine ab Version 24 mit Compose-Plugin v2**
+  (Installation: https://docs.docker.com/engine/install/ — prüfen mit
+  `docker compose version`)
+- mind. **2 CPU-Kerne und 4 GB RAM** (Frappe-Worker + Datenbank + Redis),
+  **20 GB freier Plattenplatz** für Images, Volumes und Backups
+- Netzzugriff auf `ghcr.io` (Image-Registry); bei privatem Image ein
+  GitHub-Token mit `read:packages` für `docker login ghcr.io`
+- ein Reverse-Proxy mit TLS davor (z.B. Nginx Proxy Manager) — der Stack
+  selbst spricht nur HTTP auf `HTTP_PORT`
+
+## Herunterladen
+
+Auf dem Server werden nur `compose.yaml`, `overrides/` und `example.env`
+gebraucht. Am einfachsten das ganze Repo als Archiv ziehen:
+
+```bash
+wget -O apex-deployment.tar.gz \
+  https://github.com/ChristianSandhas/apex-deployment/archive/refs/heads/main.tar.gz
+tar -xzf apex-deployment.tar.gz
+cd apex-deployment-main
+```
+
+Alternativ per Git (macht spätere Updates zu einem `git pull`):
+
+```bash
+git clone https://github.com/ChristianSandhas/apex-deployment.git
+cd apex-deployment
+```
+
+Solange das Repo privat ist, funktioniert der anonyme `wget`-Download nicht —
+dann stattdessen `gh repo clone ChristianSandhas/apex-deployment`
+(nach `gh auth login`) oder das Archiv mit Token laden:
+
+```bash
+wget --header="Authorization: Bearer github_pat_xxx" -O apex-deployment.tar.gz \
+  https://api.github.com/repos/ChristianSandhas/apex-deployment/tarball/main
+```
+
 ## Deployment
 
 ```bash
-# compose.yaml, overrides/ und example.env auf den Server kopieren, dann:
 cp example.env .env   # Passwörter/Site-Namen anpassen
 docker login ghcr.io  # falls Image privat
 
