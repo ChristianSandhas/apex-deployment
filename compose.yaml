@@ -51,8 +51,10 @@ services:
     profiles: ["postgres"]
     # Pruefstand fuer die Datenbankneutralitaet des apex-Codes;
     # Produktions-Standard bleibt MariaDB (Frappes Hauptpfad).
-    # Version wie im offiziellen frappe_docker
-    image: postgres:15.17
+    # Bewusst aktuelle Major-Version; das offizielle frappe_docker pinnt 15.17 —
+    # bei unerklaerlichen Fehlern darauf zurueckgehen (dann auch den
+    # Volume-Pfad wieder auf /var/lib/postgresql/data aendern, s.u.).
+    image: postgres:18
     restart: unless-stopped
     networks:
       default:
@@ -62,7 +64,9 @@ services:
     ports:
       - "${DB_BIND:-127.0.0.1}:${DB_PORT:-5432}:5432"
     volumes:
-      - db-postgres-data:/var/lib/postgresql/data
+      # ab Image-Version 18 liegt PGDATA unter /var/lib/postgresql/<major>/...,
+      # gemountet wird deshalb das Elternverzeichnis (bis 17: .../data)
+      - db-postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 1s
