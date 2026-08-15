@@ -1,10 +1,13 @@
-# Basis-Stack ohne Datenbank — immer zusammen mit einem DB-Override starten:
+# Kompletter Stack inkl. Datenbank. Die Datenbank wird ueber COMPOSE_PROFILES
+# in der .env gewaehlt (mariadb oder postgres):
 #
-#   docker compose -f compose.yaml -f overrides/compose.mariadb.yaml up -d
-#   docker compose -f compose.yaml -f overrides/compose.postgres.yaml up -d
+#   cp example.env .env   # COMPOSE_PROFILES=mariadb oder postgres setzen
+#   docker compose up -d
 #
-# Die DB-spezifischen Teile (db-Service, configurator- und create-site-Kommandos)
-# liegen in overrides/ — diese Datei allein ist bewusst nicht lauffähig.
+# Beide db-Services tragen den Netzwerk-Alias "db", aktiv ist immer nur einer.
+# Wichtig: die Wahl immer ueber COMPOSE_PROFILES in der .env treffen, nicht
+# ueber "docker compose --profile ..." — die Setup-Kommandos unten lesen die
+# Variable ebenfalls, um DB-Port und new-site-Flags zu bestimmen.
 
 x-app-image: &app_image
   image: ${APEX_IMAGE:-ghcr.io/christiansandhas/apex}:${APEX_VERSION:-latest}
@@ -18,6 +21,53 @@ x-depends-on-configurator: &depends_on_configurator
       condition: service_completed_successfully
 
 services:
+  db-mariadb:
+    profiles: ["mariadb"]
+    # mind. 10.7 noetig: Frappe legt UUID-Doctypes (z.B. APX Part)
+    # mit nativem uuid-Spaltentyp an
+    image: mariadb:11.8
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: [db]
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt (siehe example.env)}
+    # DB von aussen erreichbar; DB_BIND=0.0.0.0 in .env setzen, um sie im
+    # Netzwerk freizugeben (dann unbedingt Firewall auf vertrauenswuerdige IPs!)
+    ports:
+      - "${DB_BIND:-127.0.0.1}:${DB_PORT:-3306}:3306"
+    volumes:
+      - db-mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: healthcheck.sh --connect --innodb_initialized
+      interval: 1s
+      retries: 20
+
+  db-postgres:
+    profiles: ["postgres"]
+    # Pruefstand fuer die Datenbankneutralitaet des apex-Codes;
+    # Produktions-Standard bleibt MariaDB (Frappes Hauptpfad).
+    # Version wie im offiziellen frappe_docker
+    image: postgres:15.17
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: [db]
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt (siehe example.env)}
+    ports:
+      - "${DB_BIND:-127.0.0.1}:${DB_PORT:-5432}:5432"
+    volumes:
+      - db-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 1s
+      retries: 20
+
   redis-cache:
     image: redis:6.2-alpine
     restart: unless-stopped
@@ -28,17 +78,55 @@ services:
     volumes:
       - redis-queue-data:/data
 
+  # Kein depends_on auf die db: Compose erlaubt keine Abhaengigkeit auf
+  # Profil-Services. Das Warten uebernimmt wait-for-it in create-site.
   configurator:
     <<: *app_image
     restart: "no"
     entrypoint: ["bash", "-c"]
-    # command + depends_on kommen aus dem DB-Override (db_port unterscheidet sich)
+    command:
+      - >
+        if [ "${COMPOSE_PROFILES:?COMPOSE_PROFILES fehlt - mariadb oder postgres, siehe example.env}" = "postgres" ];
+        then dbport=5432; else dbport=3306; fi;
+        bench set-config -g db_host db;
+        bench set-config -gp db_port $$dbport;
+        bench set-config -g redis_cache "redis://redis-cache:6379";
+        bench set-config -g redis_queue "redis://redis-queue:6379";
+        bench set-config -g redis_socketio "redis://redis-queue:6379";
+        bench set-config -gp socketio_port 9000;
 
   create-site:
     <<: [*app_image, *depends_on_configurator]
     restart: "no"
     entrypoint: ["bash", "-c"]
-    # command kommt aus dem DB-Override (new-site-Flags unterscheiden sich)
+    command:
+      - >
+        if [ "${COMPOSE_PROFILES:-mariadb}" = "postgres" ];
+        then dbport=5432; else dbport=3306; fi;
+        wait-for-it -t 120 db:$$dbport;
+        wait-for-it -t 120 redis-cache:6379;
+        wait-for-it -t 120 redis-queue:6379;
+        export start=`date +%s`;
+        until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]];
+        do
+          echo "Warte auf common_site_config.json...";
+          sleep 5;
+          if (( `date +%s`-start > 120 )); then echo "Timeout"; exit 1; fi
+        done;
+        [ -d "sites/${SITE_NAME}" ] && echo "Site existiert bereits" && exit 0;
+        if [ "${COMPOSE_PROFILES:-mariadb}" = "postgres" ];
+        then bench new-site ${SITE_NAME}
+        --db-type postgres
+        --db-root-username postgres
+        --admin-password=${ADMIN_PASSWORD}
+        --db-root-password=${DB_PASSWORD}
+        --install-app apex;
+        else bench new-site ${SITE_NAME}
+        --mariadb-user-host-login-scope='%'
+        --admin-password=${ADMIN_PASSWORD}
+        --db-root-password=${DB_PASSWORD}
+        --install-app apex;
+        fi
 
   backend:
     <<: [*app_image, *depends_on_configurator]
@@ -80,3 +168,5 @@ services:
 volumes:
   sites:
   redis-queue-data:
+  db-mariadb-data:
+  db-postgres-data:

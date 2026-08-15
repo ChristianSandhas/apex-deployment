@@ -12,15 +12,19 @@ falls der Actions-Build einmal nicht verfügbar ist.
 ## Struktur
 
 ```
-compose.yaml                     Basis-Stack (Frappe, Redis, Worker) — ohne DB
-overrides/compose.mariadb.yaml   MariaDB-Variante (Produktions-Standard)
-overrides/compose.postgres.yaml  Postgres-Variante (Prüfstand für DB-Neutralität)
-example.env                      Vorlage für .env (echte .env nie einchecken)
-apps.json + build.sh             manueller Image-Build (Fallback)
+compose.yaml           kompletter Stack; die Datenbank wird über
+                       COMPOSE_PROFILES in der .env gewählt
+example.env            Vorlage für .env (echte .env nie einchecken)
+apps.json + build.sh   manueller Image-Build (Fallback)
 ```
 
-Die Basis-Datei allein ist bewusst nicht lauffähig — immer mit genau einem
-DB-Override kombinieren.
+Beide Datenbank-Services (MariaDB und Postgres) stehen in derselben Datei;
+aktiv ist immer nur der, dessen Profil über `COMPOSE_PROFILES` gewählt ist
+(`mariadb` = Produktions-Standard, `postgres` = Prüfstand für die
+DB-Neutralität des apex-Codes). Beide sind im Netzwerk als `db` erreichbar.
+Die Wahl **immer in der `.env` treffen**, nicht über `docker compose
+--profile` — die Setup-Kommandos lesen dieselbe Variable, um DB-Port und
+`bench new-site`-Flags zu bestimmen.
 
 ## Systemvoraussetzungen
 
@@ -38,8 +42,8 @@ DB-Override kombinieren.
 
 ## Herunterladen
 
-Auf dem Server werden nur `compose.yaml`, `overrides/` und `example.env`
-gebraucht. Am einfachsten das ganze Repo als Archiv ziehen:
+Auf dem Server werden nur `compose.yaml` und `example.env` gebraucht.
+Am einfachsten das ganze Repo als Archiv ziehen:
 
 ```bash
 wget -O apex-deployment.tar.gz \
@@ -67,14 +71,9 @@ wget --header="Authorization: Bearer github_pat_xxx" -O apex-deployment.tar.gz \
 ## Deployment
 
 ```bash
-cp example.env .env   # Passwörter/Site-Namen anpassen
+cp example.env .env   # COMPOSE_PROFILES, Passwörter, Site-Namen anpassen
 docker login ghcr.io  # falls Image privat
-
-# MariaDB (Produktion):
-docker compose -f compose.yaml -f overrides/compose.mariadb.yaml up -d
-
-# oder Postgres (Prüfstand):
-docker compose -f compose.yaml -f overrides/compose.postgres.yaml up -d
+docker compose up -d
 ```
 
 Beim ersten Start legt `create-site` die Site an und installiert apex.
@@ -82,27 +81,27 @@ Erreichbar unter Port `HTTP_PORT` (Standard 8080) — davor gehört ein
 Reverse-Proxy mit TLS (z.B. der vorhandene Nginx Proxy Manager).
 
 **Eine Datenbank pro Deployment:** Die Site im `sites`-Volume ist fest an die
-beim Anlegen gewählte Datenbank gebunden. Ein Wechsel MariaDB ↔ Postgres ist
-kein Umschalten, sondern eine neue Site (Volumes entfernen oder besser ein
-eigenes Compose-Projekt starten). Beide Varianten parallel auf einem Host:
+beim Anlegen gewählte Datenbank gebunden. `COMPOSE_PROFILES` später zu ändern
+ist also kein Umschalten, sondern bräuchte eine neue Site (Volumes entfernen
+oder besser ein eigenes Compose-Projekt starten). Beide Varianten parallel
+auf einem Host:
 
 ```bash
-docker compose -p apex-pg -f compose.yaml -f overrides/compose.postgres.yaml up -d
+COMPOSE_PROFILES=postgres HTTP_PORT=8081 docker compose -p apex-pg up -d
 ```
 
 `-p` gibt dem zweiten Stack einen eigenen Projektnamen und damit eigene
-Volumes und Netzwerke; `HTTP_PORT`/`DB_PORT` in der `.env` dann anpassen,
-damit sich die Host-Ports nicht beißen.
+Volumes und Netzwerke; Variablen auf der Kommandozeile übersteuern die
+`.env` (andere Ports wählen, damit sich die Stacks nicht beißen).
 
 ## Update auf neue Version
 
 ```bash
 # Neues Release im apex-Repo taggen (Actions baut und pusht das Image), dann:
 # APEX_VERSION in .env anheben
-docker compose -f compose.yaml -f overrides/compose.mariadb.yaml pull
-docker compose -f compose.yaml -f overrides/compose.mariadb.yaml up -d
-docker compose -f compose.yaml -f overrides/compose.mariadb.yaml exec backend \
-  bench --site <sitename> migrate
+docker compose pull
+docker compose up -d
+docker compose exec backend bench --site <sitename> migrate
 ```
 
 ## Manueller Image-Build (Fallback)
