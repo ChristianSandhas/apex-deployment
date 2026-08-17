@@ -148,8 +148,9 @@ bench --site migration.tmp migrate
 # die echte Site behält ihren Ordner samt Key, nur die DB wird untergeschoben.
 
 # 3. Echte Site auf die neue DB zeigen lassen: in sites/<sitename>/site_config.json
-#    db_type, db_name und db_password aus sites/migration.tmp/site_config.json
-#    übernehmen. db_host NICHT übernehmen (global bleibt "db"), encryption_key
+#    db_type, db_name, db_password und db_user aus sites/migration.tmp/site_config.json
+#    übernehmen (ein alter MariaDB-db_user fuehrt sonst zu "password authentication
+#    failed"). db_host NICHT übernehmen (global bleibt "db"), encryption_key
 #    und alles andere unangetastet lassen.
 
 # 4. Temp-Site-Ordner entfernen — NICHT "bench drop-site", die DB gehört jetzt
