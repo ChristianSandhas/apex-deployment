@@ -14,6 +14,14 @@ x-app-image: &app_image
   restart: unless-stopped
   volumes:
     - sites:/home/frappe/frappe-bench/sites
+  # MariaDB-Clients in den App-Containern auf grosse Zeilen vorbereiten:
+  # mariadb-dump (Backup) und mariadb (Restore) haben eigene Paketlimits
+  # (16-24M Vorgabe) und wuerden sonst an ueberlangen Communication-Zeilen
+  # abbrechen - Gegenstueck zum Server-Flag am db-mariadb-Service, s.u.
+  # Postgres kennt kein solches Limit, dort ist nichts noetig.
+  configs:
+    - source: mariadb-client-packet
+      target: /home/frappe/.my.cnf
 
 x-depends-on-configurator: &depends_on_configurator
   depends_on:
@@ -34,6 +42,11 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --skip-character-set-client-handshake
+      # einzelne Mails koennen Communication-Zeilen ueber der 16M-Vorgabe
+      # erzeugen; ohne das Flag kappt der Server die Verbindung mitten im
+      # INSERT ("Server has gone away") und der Mailabruf haengt dauerhaft
+      # an dieser Mail (belegt 2026-08: Nachimport-Stopp bei einer Riesenmail)
+      - --max-allowed-packet=256M
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt (siehe example.env)}
     # DB von aussen erreichbar; DB_BIND=0.0.0.0 in .env setzen, um sie im
@@ -168,6 +181,19 @@ services:
   scheduler:
     <<: [*app_image, *depends_on_configurator]
     command: ["bench", "schedule"]
+
+# Inline-Configs brauchen Docker Compose >= 2.23.1. Die Datei landet als
+# ~/.my.cnf des frappe-Users in allen App-Containern; [mysql] deckt den
+# Restore-Client ab, [mysqldump] den Backup-Dump. Bewusst keine [client]-
+# Sektion: die lesen auch Werkzeuge, die die Option nicht kennen.
+configs:
+  mariadb-client-packet:
+    content: |
+      [mysql]
+      max_allowed_packet=256M
+
+      [mysqldump]
+      max_allowed_packet=256M
 
 volumes:
   sites:

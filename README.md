@@ -30,8 +30,9 @@ Die Wahl **immer in der `.env` treffen**, nicht über `docker compose
 
 - Linux-Server, **x86_64/amd64** (das Image wird nur für diese Architektur
   gebaut), z.B. Ubuntu 22.04/24.04 LTS
-- **Docker Engine ab Version 24 mit Compose-Plugin v2**
-  (Installation: https://docs.docker.com/engine/install/ — prüfen mit
+- **Docker Engine ab Version 24 mit Compose-Plugin v2** (mindestens
+  Compose **2.23.1**, wegen der Inline-Configs in der compose.yaml;
+  Installation: https://docs.docker.com/engine/install/ — prüfen mit
   `docker compose version`)
 - mind. **2 CPU-Kerne und 4 GB RAM** (Frappe-Worker + Datenbank + Redis),
   **20 GB freier Plattenplatz** für Images, Volumes und Backups
