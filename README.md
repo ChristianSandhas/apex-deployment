@@ -105,6 +105,71 @@ docker compose up -d
 docker compose exec backend bench --site <sitename> migrate
 ```
 
+## Migration MariaDB → PostgreSQL (einmalig)
+
+Der Stack betreibt bewusst nur **eine** Datenbank (beide Services teilen sich den
+Netzwerk-Alias `db`). Für den einmaligen Umzug wird deshalb **nicht** das zweite
+Profil aktiviert, sondern Postgres läuft für die Dauer der Migration als
+Wegwerf-Container daneben — mit demselben Volume, das später der reguläre
+`db-postgres`-Service nutzt. Nach dem Umschalten findet er die Daten dort vor.
+
+Die Site behält dabei Ordner, Dateien (Anhänge, `.eml`-Ablage) und
+`encryption_key` — nur die Datenbank darunter wird getauscht. Voraussetzung:
+ein Image, das `apps/apex/scripts/migrate_mariadb_to_postgres.py` enthält
+(sonst das Skript vorab per `docker compose cp` in den backend-Container legen).
+Namen von Netzwerk/Volume ggf. mit `docker network ls` / `docker volume ls`
+prüfen (Präfix = Ordnername des Stacks).
+
+```bash
+# 0. Backup ziehen, Schreibbetrieb anhalten (backend bleibt für Kommandos an)
+docker compose exec backend bench --site <sitename> backup
+docker compose stop frontend websocket scheduler queue-short queue-long
+
+# 1. Wegwerf-Postgres mit dem Volume des späteren Services starten
+docker run -d --name db-migration \
+  --network apex-deployment_default \
+  -e POSTGRES_PASSWORD=<DB_PASSWORD aus .env> \
+  -v apex-deployment_db-postgres-data:/var/lib/postgresql \
+  postgres:18
+
+# 2. Im backend-Container: Zielschema durch Frappe anlegen, dann Daten kopieren
+docker compose exec backend bash
+bench new-site migration.tmp --db-type postgres --db-host db-migration \
+  --db-root-username postgres --db-root-password <DB_PASSWORD> \
+  --admin-password egal --install-app apex
+# WICHTIG: erst migrate — Custom-Field-Spalten (z. B. auf Communication)
+# entstehen erst hier; das Skript prueft das und bricht sonst ab.
+bench --site migration.tmp migrate
+./env/bin/python apps/apex/scripts/migrate_mariadb_to_postgres.py \
+  --source-site <sitename> --target-site migration.tmp --dry-run
+./env/bin/python apps/apex/scripts/migrate_mariadb_to_postgres.py \
+  --source-site <sitename> --target-site migration.tmp
+# Die encryption_key-Warnung des Skripts ist in DIESEM Ablauf unkritisch:
+# die echte Site behält ihren Ordner samt Key, nur die DB wird untergeschoben.
+
+# 3. Echte Site auf die neue DB zeigen lassen: in sites/<sitename>/site_config.json
+#    db_type, db_name und db_password aus sites/migration.tmp/site_config.json
+#    übernehmen. db_host NICHT übernehmen (global bleibt "db"), encryption_key
+#    und alles andere unangetastet lassen.
+
+# 4. Temp-Site-Ordner entfernen — NICHT "bench drop-site", die DB gehört jetzt
+#    der echten Site!
+rm -rf sites/migration.tmp
+exit
+
+# 5. Umschalten
+docker rm -f db-migration
+# in .env: COMPOSE_PROFILES=postgres (und ein evtl. gesetztes DB_PORT=3306 entfernen)
+docker compose down && docker compose up -d
+docker compose exec backend bench --site <sitename> migrate   # Sanity-Check
+docker compose exec backend bench --site <sitename> clear-cache
+```
+
+Danach anmelden und stichprobenartig prüfen (Mails samt Anhängen, Zeiterfassung,
+Nummernkreise). **Rückweg**, falls etwas klemmt: `site_config.json` zurückdrehen,
+`COMPOSE_PROFILES=mariadb`, `docker compose down && up -d` — das MariaDB-Volume
+bleibt so lange unangetastet liegen, bis man es bewusst löscht.
+
 ## Manueller Image-Build (Fallback)
 
 Braucht einen **read-only GitHub-Token** (Settings → Developer settings →
