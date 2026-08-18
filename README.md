@@ -134,7 +134,9 @@ docker run -d --name db-migration \
 
 # 2. Im backend-Container: Zielschema durch Frappe anlegen, dann Daten kopieren
 docker compose exec backend bash
-bench new-site migration.tmp --db-type postgres --db-host db-migration \
+# --db-port 5432 ist Pflicht: global steht db_port auf 3306 (MariaDB-Profil),
+# und new-site wendet den sonst auch auf die Postgres-Verbindung an.
+bench new-site migration.tmp --db-type postgres --db-host db-migration --db-port 5432 \
   --db-root-username postgres --db-root-password <DB_PASSWORD> \
   --admin-password egal --install-app apex
 # WICHTIG: erst migrate — Custom-Field-Spalten (z. B. auf Communication)
@@ -170,6 +172,17 @@ Danach anmelden und stichprobenartig prüfen (Mails samt Anhängen, Zeiterfassun
 Nummernkreise). **Rückweg**, falls etwas klemmt: `site_config.json` zurückdrehen,
 `COMPOSE_PROFILES=mariadb`, `docker compose down && up -d` — das MariaDB-Volume
 bleibt so lange unangetastet liegen, bis man es bewusst löscht.
+
+**Warnung — COMPOSE_PROFILES ist ein Einzelwert:** `mariadb` **oder** `postgres`,
+niemals beide (`mariadb,postgres`). Ein Mischwert startet beide Datenbanken: Der
+geteilte Netzwerk-Alias `db` ist dann doppelt vergeben (Verbindungen landen zufällig
+mal hier, mal dort), und die Setup-Kommandos erkennen den Postgres-Modus nur am
+exakten Wert — sie setzen sonst den falschen globalen DB-Port. Symptome: Web geht
+„irgendwie", Hintergrund-Jobs scheitern reihenweise. Erkennen: `docker compose ps`
+zeigt zwei db-Container. Beheben: `.env` korrigieren, dann
+`docker compose --profile mariadb down` (ein nach der Korrektur inaktives Profil
+braucht den expliziten `--profile`-Zusatz, sonst läuft sein Container einfach
+weiter) und `docker compose up -d`.
 
 ## Manueller Image-Build (Fallback)
 
