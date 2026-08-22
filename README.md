@@ -105,6 +105,51 @@ docker compose up -d
 docker compose exec backend bench --site <sitename> migrate
 ```
 
+## Betrieb & Diagnose
+
+### „Process Not Found" im System Health Report
+
+Der System Health Report (`/app/system-health-report`) meldet im Container-Betrieb
+dauerhaft `Process Not Found` für den Scheduler — **auch wenn dieser einwandfrei
+läuft**. Das ist erwartet und kein Ausfall.
+
+Grund: Frappe erkennt den laufenden Scheduler nicht am Prozess, sondern an einer
+Lock-Datei unter `frappe-bench/config/scheduler_process`. Der Stack teilt zwischen
+den Containern aber nur das `sites`-Volume; `config/` kommt aus dem Image und ist
+in jedem Container eine eigene Kopie. Der `scheduler`-Container hält die Sperre
+damit in seinem eigenen Dateisystem, während der `backend`-Container — der den
+Report rendert — auf eine andere, ungesperrte Datei schaut.
+
+`config/` als geteiltes Volume nachzurüsten behebt zwar die Anzeige, ist die
+Nebenwirkung aber nicht wert: Ein Named Volume wird nur beim ersten Start aus dem
+Image befüllt und bekäme bei Image-Updates keine neuen Configs mehr.
+
+Der tatsächliche Zustand wird stattdessen so geprüft:
+
+```bash
+docker compose ps scheduler            # Container up? bench schedule ist dessen Hauptprozess
+docker compose logs --tail=50 scheduler
+docker compose exec backend bench --site <sitename> scheduler status
+```
+
+Der letzte Befehl ist wichtig, weil der Report seine Prüfungen in fester Reihenfolge
+abarbeitet: Die Prozess-Erkennung greift **vor** der Statusprüfung, `Process Not Found`
+überdeckt also ein eventuelles `Inactive`. Ein für die Site pausierter oder
+abgeschalteter Scheduler (`pause_scheduler` nach einem abgebrochenen `migrate`,
+`disable_scheduler`) wäre in der Oberfläche schlicht nicht zu sehen. Bei Bedarf mit
+`bench --site <sitename> scheduler resume` bzw. `enable` reaktivieren.
+
+Als inhaltliche Gegenprobe, ob wirklich Jobs abgearbeitet werden:
+
+```bash
+docker compose exec backend bench --site <sitename> execute frappe.db.get_all \
+  --kwargs '{"doctype":"Scheduled Job Type","fields":["name","method","last_execution"],"order_by":"last_execution desc","limit_page_length":5}'
+```
+
+Aktuelle Zeitstempel bedeuten: alles in Ordnung. Einträge mit `last_execution: null`
+sind unauffällig (selten laufende oder neu hinzugekommene Jobs) — unter Postgres
+sortieren sie bei `DESC` allerdings nach oben, unter MariaDB nach unten.
+
 ## Migration MariaDB → PostgreSQL (einmalig)
 
 Der Stack betreibt bewusst nur **eine** Datenbank (beide Services teilen sich den
